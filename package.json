@@ -19,7 +19,8 @@
     "verify:api": "node deploy/scripts/verify-api.mjs",
     "verify:shop": "node deploy/scripts/verify-shop-migration.mjs",
     "verify:shop-chain": "node deploy/scripts/verify-shop-chain.mjs",
-    "verify:shop-admin": "node deploy/scripts/verify-shop-admin.mjs"
+    "verify:shop-admin": "node deploy/scripts/verify-shop-admin.mjs",
+    "verify:shop-refund": "node deploy/scripts/verify-shop-refund.mjs"
   },
   "engines": {
     "node": ">=20"

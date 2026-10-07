@@ -15,6 +15,7 @@ import { pool } from '../db/client.js';
 import { HttpError } from '../middleware/errors.js';
 import { requireUser, optionalUser } from '../middleware/auth.js';
 import { createShopOrder, quoteShopOrder, releaseShopOrderStock } from '../lib/shop.js';
+import { applyRefund, cancelRefund, confirmReceive } from '../lib/shop-refund.js';
 
 export const shopRouter = Router();
 export const shopUserRouter = Router();
@@ -529,5 +530,107 @@ shopRouter.get('/orders/:id', requireUser, async (req: Request, res: Response, n
         })),
       },
     });
+  } catch (e) { next(e); }
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// 确认收货 + 售后（阶段 4）
+// ────────────────────────────────────────────────────────────────────────
+
+/** POST /api/shop/orders/:id/receive → 确认收货（快递单；触发返利结算，幂等） */
+shopRouter.post('/orders/:id/receive', requireUser, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, '订单 ID 不合法', 'BAD_PARAM');
+    const out = await confirmReceive(id, req.user!.userId, req.user!.siteId);
+    res.json({ ok: true, data: { order_id: id, ...out } });
+  } catch (e) { next(e); }
+});
+
+/** POST /api/shop/orders/:id/refund {item_id?, num?, type?, reason?, description?, images?} → 申请售后 */
+shopRouter.post('/orders/:id/refund', requireUser, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, '订单 ID 不合法', 'BAD_PARAM');
+    const out = await applyRefund({
+      siteId: req.user!.siteId,
+      userId: req.user!.userId,
+      orderId: id,
+      itemId: Number(req.body?.item_id) > 0 ? Number(req.body.item_id) : undefined,
+      num: Number(req.body?.num) > 0 ? Number(req.body.num) : undefined,
+      type: String(req.body?.type ?? 'refund') === 'return' ? 'return' : 'refund',
+      reason: req.body?.reason,
+      description: req.body?.description,
+      images: req.body?.images,
+    });
+    res.json({ ok: true, data: out });
+  } catch (e) { next(e); }
+});
+
+/** GET /api/shop/refunds?page=&size= → 我的售后单 */
+shopRouter.get('/refunds', requireUser, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const page = clampInt(req.query.page, 1, 10_000, 1);
+    const size = clampInt(req.query.size, 1, 50, 10);
+    const total = Number((await pool.query(
+      `SELECT COUNT(*)::int AS n FROM shop_refund WHERE user_id = $1::bigint AND site_id = $2::uuid`,
+      [req.user!.userId, req.user!.siteId],
+    )).rows[0]?.n ?? 0);
+    const { rows } = await pool.query(
+      `SELECT r.refund_id, r.refund_sn, r.order_id, r.type, r.amount::float AS amount, r.num, r.status,
+              r.reason, r.fail_reason, r.applied_at, r.finished_at, o.order_sn
+         FROM shop_refund r JOIN "order" o ON o.id = r.order_id
+        WHERE r.user_id = $1::bigint AND r.site_id = $2::uuid
+        ORDER BY r.refund_id DESC LIMIT $3::int OFFSET $4::int`,
+      [req.user!.userId, req.user!.siteId, size, (page - 1) * size],
+    );
+    res.json({
+      ok: true,
+      data: {
+        page, size, total,
+        items: rows.map((r) => ({
+          refund_id: Number(r.refund_id), refund_sn: String(r.refund_sn), order_id: Number(r.order_id),
+          order_sn: String(r.order_sn), type: String(r.type), amount: Number(r.amount), num: Number(r.num),
+          status: String(r.status), reason: r.reason ?? '', fail_reason: r.fail_reason ?? '',
+          applied_at: r.applied_at, finished_at: r.finished_at,
+        })),
+      },
+    });
+  } catch (e) { next(e); }
+});
+
+/** GET /api/shop/refunds/:id → 售后详情 */
+shopRouter.get('/refunds/:id', requireUser, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    const { rows } = await pool.query(
+      `SELECT r.*, o.order_sn FROM shop_refund r JOIN "order" o ON o.id = r.order_id
+        WHERE r.refund_id = $1::bigint AND r.user_id = $2::bigint AND r.site_id = $3::uuid LIMIT 1`,
+      [id, req.user!.userId, req.user!.siteId],
+    );
+    if (!rows[0]) throw new HttpError(404, '售后单不存在', 'REFUND_NOT_FOUND');
+    const r = rows[0];
+    res.json({
+      ok: true,
+      data: {
+        refund_id: Number(r.refund_id), refund_sn: String(r.refund_sn), order_id: Number(r.order_id),
+        order_sn: String(r.order_sn), item_id: r.item_id === null ? null : Number(r.item_id),
+        type: String(r.type), reason: r.reason ?? '', description: r.description ?? '', images: r.images ?? [],
+        amount: Number(r.amount), num: Number(r.num), status: String(r.status),
+        wx_refund_state: r.wx_refund_state ?? '', fail_reason: r.fail_reason ?? '',
+        admin_remark: r.admin_remark ?? '',
+        applied_at: r.applied_at, audited_at: r.audited_at, finished_at: r.finished_at,
+      },
+    });
+  } catch (e) { next(e); }
+});
+
+/** POST /api/shop/refunds/:id/cancel → 撤销申请（仅 applied） */
+shopRouter.post('/refunds/:id/cancel', requireUser, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = Number(req.params.id);
+    const ok = await cancelRefund(id, req.user!.userId);
+    if (!ok) throw new HttpError(409, '售后单状态不可撤销', 'BAD_REFUND_STATE');
+    res.json({ ok: true, data: { refund_id: id, status: 'canceled' } });
   } catch (e) { next(e); }
 });

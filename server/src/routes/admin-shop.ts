@@ -16,6 +16,8 @@ import { pool } from '../db/client.js';
 import { HttpError } from '../middleware/errors.js';
 import { requireAdmin, assertSiteAccess, type AdminJwtPayload } from '../middleware/auth.js';
 import { withTx } from '../lib/shop.js';
+import { approveRefund, rejectRefund, finishRefundManually } from '../lib/shop-refund.js';
+import { settleRebateOnVerify } from './trade.js';
 
 export const adminShopRouter = Router();
 
@@ -780,5 +782,135 @@ adminShopRouter.post('/orders/:id/ship', async (req: Request, res: Response, nex
       [id, siteId, JSON.stringify({ company, tracking_no: trackingNo, shipped_at: new Date().toISOString(), by: req.admin!.username })],
     );
     res.json({ ok: true, data: { order_id: Number(rows[0].id), fulfill_status: String(rows[0].fulfill_status), company, tracking_no: trackingNo } });
+  } catch (e) { next(e); }
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// 售后（阶段 4）
+// ════════════════════════════════════════════════════════════════════════
+
+/** GET /api/admin/shop/refunds?status=&page=&size= */
+adminShopRouter.get('/refunds', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const siteId = await adminSite(req.admin!, req);
+    const page = clampInt(req.query.page, 1, 10_000, 1);
+    const size = clampInt(req.query.size, 1, 100, 20);
+    const status = String(req.query.status ?? '').trim();
+    const params: unknown[] = [siteId];
+    let where = `r.site_id = $1::uuid`;
+    if (['applied', 'approved', 'rejected', 'refunding', 'success', 'failed', 'canceled'].includes(status)) {
+      params.push(status); where += ` AND r.status = $${params.length}::varchar`;
+    }
+    const total = Number((await pool.query(`SELECT COUNT(*)::int AS n FROM shop_refund r WHERE ${where}`, params)).rows[0]?.n ?? 0);
+    params.push(size, (page - 1) * size);
+    const { rows } = await pool.query(
+      `SELECT r.refund_id, r.refund_sn, r.order_id, r.item_id, r.user_id, r.type, r.amount::float AS amount, r.num,
+              r.status, r.reason, r.fail_reason, r.wx_refund_id, r.wx_refund_state, r.applied_at, r.finished_at,
+              o.order_sn, o.pay_price::float AS pay_price, o.platform_status, o.fulfillment,
+              (SELECT title FROM shop_order_item i WHERE i.item_id = r.item_id) AS item_title
+         FROM shop_refund r JOIN "order" o ON o.id = r.order_id
+        WHERE ${where}
+        ORDER BY (r.status = 'applied') DESC, r.refund_id DESC
+        LIMIT $${params.length - 1}::int OFFSET $${params.length}::int`,
+      params,
+    );
+    res.json({
+      ok: true,
+      data: {
+        page, size, total,
+        items: rows.map((r) => ({
+          refund_id: Number(r.refund_id), refund_sn: String(r.refund_sn),
+          order_id: Number(r.order_id), order_sn: String(r.order_sn),
+          item_id: r.item_id === null ? null : Number(r.item_id), item_title: r.item_title ?? '',
+          user_id: Number(r.user_id), type: String(r.type),
+          amount: Number(r.amount), num: Number(r.num), pay_price: Number(r.pay_price),
+          status: String(r.status), reason: r.reason ?? '', fail_reason: r.fail_reason ?? '',
+          wx_refund_id: r.wx_refund_id ?? '', wx_refund_state: r.wx_refund_state ?? '',
+          platform_status: String(r.platform_status), fulfillment: String(r.fulfillment),
+          applied_at: r.applied_at, finished_at: r.finished_at,
+        })),
+      },
+    });
+  } catch (e) { next(e); }
+});
+
+/** GET /api/admin/shop/refunds/:id → 含冲销台账 */
+adminShopRouter.get('/refunds/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const siteId = await adminSite(req.admin!, req);
+    const id = Number(req.params.id);
+    const { rows } = await pool.query(
+      `SELECT r.*, o.order_sn, o.pay_price::float AS pay_price, o.platform_status, o.fulfillment
+         FROM shop_refund r JOIN "order" o ON o.id = r.order_id
+        WHERE r.refund_id = $1::bigint AND r.site_id = $2::uuid LIMIT 1`,
+      [id, siteId],
+    );
+    if (!rows[0]) throw new HttpError(404, '售后单不存在', 'REFUND_NOT_FOUND');
+    const r = rows[0];
+    res.json({
+      ok: true,
+      data: {
+        refund: {
+          refund_id: Number(r.refund_id), refund_sn: String(r.refund_sn), order_id: Number(r.order_id),
+          order_sn: String(r.order_sn), item_id: r.item_id === null ? null : Number(r.item_id),
+          user_id: Number(r.user_id), type: String(r.type), amount: Number(r.amount), num: Number(r.num),
+          status: String(r.status), reason: r.reason ?? '', description: r.description ?? '', images: r.images ?? [],
+          wx_refund_id: r.wx_refund_id ?? '', wx_refund_state: r.wx_refund_state ?? '',
+          fail_reason: r.fail_reason ?? '', admin_remark: r.admin_remark ?? '',
+          reversed: r.reversed ?? [],
+          applied_at: r.applied_at, audited_at: r.audited_at, finished_at: r.finished_at,
+        },
+      },
+    });
+  } catch (e) { next(e); }
+});
+
+/** POST /api/admin/shop/refunds/:id/approve → 通过并发起退款（有真凭据走微信，无则 mock 落账） */
+adminShopRouter.post('/refunds/:id/approve', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const siteId = await adminSite(req.admin!, req);
+    const id = Number(req.params.id);
+    const out = await approveRefund(id, { adminId: String(req.admin!.adminId), username: String(req.admin!.username) }, siteId);
+    res.json({ ok: true, data: { refund_id: id, ...out } });
+  } catch (e) { next(e); }
+});
+
+/** POST /api/admin/shop/refunds/:id/reject {reason} */
+adminShopRouter.post('/refunds/:id/reject', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await adminSite(req.admin!, req);
+    const id = Number(req.params.id);
+    const ok = await rejectRefund(id, { adminId: req.admin!.adminId }, String(req.body?.reason ?? ''));
+    if (!ok) throw new HttpError(409, '售后单状态不可驳回', 'BAD_REFUND_STATE');
+    res.json({ ok: true, data: { refund_id: id, status: 'rejected' } });
+  } catch (e) { next(e); }
+});
+
+/** POST /api/admin/shop/refunds/:id/finish {success, note?} → 人工判定退款结果（微信 PROCESSING/ABNORMAL 或线下退款） */
+adminShopRouter.post('/refunds/:id/finish', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await adminSite(req.admin!, req);
+    const id = Number(req.params.id);
+    const success = req.body?.success !== false;
+    const ok = await finishRefundManually(id, { adminId: req.admin!.adminId }, success, req.body?.note);
+    if (!ok) throw new HttpError(409, '售后单状态不可操作', 'BAD_REFUND_STATE');
+    res.json({ ok: true, data: { refund_id: id, success } });
+  } catch (e) { next(e); }
+});
+
+/** POST /api/admin/shop/orders/:id/settle → 强制结算（虚拟单/异常单运营兜底，幂等） */
+adminShopRouter.post('/orders/:id/settle', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const siteId = await adminSite(req.admin!, req);
+    const id = Number(req.params.id);
+    const own = await pool.query(
+      `SELECT id, platform_status, settled_at FROM "order" WHERE id=$1::bigint AND site_id=$2::uuid AND provider='self' LIMIT 1`,
+      [id, siteId],
+    );
+    if (!own.rows[0]) throw new HttpError(404, '订单不存在', 'ORDER_NOT_FOUND');
+    if (String(own.rows[0].platform_status) === 'created') throw new HttpError(409, '订单未支付，不能结算', 'BAD_ORDER_STATE');
+    await settleRebateOnVerify(id);
+    const after = await pool.query(`SELECT platform_status, settled_at FROM "order" WHERE id=$1::bigint`, [id]);
+    res.json({ ok: true, data: { order_id: id, platform_status: String(after.rows[0].platform_status), settled_at: after.rows[0].settled_at } });
   } catch (e) { next(e); }
 });

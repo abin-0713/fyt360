@@ -230,6 +230,10 @@ CREATE TABLE IF NOT EXISTS shop_stock_log (
 CREATE INDEX IF NOT EXISTS idx_shop_stock_log_sku ON shop_stock_log (sku_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_shop_stock_log_ref ON shop_stock_log (site_id, ref);
 
+-- 冲销台账：退款时把"元宝扣回 / 佣金作废 / 余额不足挂账"的明细写在这里（审计与对账取证）
+ALTER TABLE shop_refund ADD COLUMN IF NOT EXISTS reversed JSONB NOT NULL DEFAULT '[]'::jsonb;
+COMMENT ON COLUMN shop_refund.reversed IS '冲销明细 [{kind:ingot|commission, user_id, amount, applied, shortfall, note}]；未结算订单为空数组';
+
 -- ────────────────────────────────────────────────────────────────────────
 -- ⑨ 存量数据迁移：self_goods.skus JSON → shop_sku
 --    幂等：某商品已有 SKU 行则整商品跳过；raw 保留原始元素
