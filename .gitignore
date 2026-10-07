@@ -24,3 +24,8 @@ deploy/.pgdata-*/
 *.log
 .DS_Store
 Thumbs.db
+
+# 二开：本地验收用的浏览器与 npm 缓存（体积大，不入库）
+.pw-browsers/
+.npm-cache/
+.npm-logs/
