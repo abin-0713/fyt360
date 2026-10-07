@@ -91,7 +91,13 @@ async function main() {
     await q(`INSERT INTO coupon (site_id, name, type, amount, threshold, valid_to) VALUES ($1,'满20减5','cash_off',5,20, now() + interval '30 days')`, [siteId]);
     const c = await one(`SELECT id FROM coupon WHERE name='满20减5' LIMIT 1`);
     const uc = await one(`INSERT INTO user_coupon (user_id, coupon_id, status, expire_at) VALUES ($1,$2,'unused', now() + interval '30 days') RETURNING id`, [user.user_id, c.id]);
-    check('测试数据就绪', !!(siteId && skuA1.sku_id && skuV1.sku_id && skuB1.sku_id && uc.id));
+    // 上游风格商品：库存仍在 self_goods.skus JSON 里（到店团购），用于回归验证两套库存体系共存
+    const gl = await one(
+      `INSERT INTO self_goods (site_id, title, main_imgs, skus, delivery_type, status, shop_status)
+       VALUES ($1,'上游团购商品L','["l.jpg"]'::jsonb,
+               '[{"sku_id":"s1","spec":"1件","price":0.01,"stock":100,"cost":0.005}]'::jsonb,
+               'group','on','on') RETURNING goods_id`, [siteId]);
+    check('测试数据就绪', !!(siteId && skuA1.sku_id && skuV1.sku_id && skuB1.sku_id && uc.id && gl.goods_id));
 
     console.log('\n[3] 启动 API');
     api = spawn(process.execPath, [path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), 'server/src/index.ts'], {
@@ -123,7 +129,9 @@ async function main() {
     const cats = await call('GET', '/api/shop/categories?site=site-a');
     check('分类接口返回 1 个分类', cats.status === 200 && cats.data?.flat?.length === 1, JSON.stringify(cats.body));
     const list = await call('GET', '/api/shop/goods?site=site-a');
-    check('商品列表 3 个（只出上架且有可售 SKU）', list.data?.items?.length === 3, JSON.stringify(list.data?.items?.map((i) => i.title)));
+    check('商城列表 3 个（上游团购商品没有 shop_sku → 不进商城列表）',
+      list.data?.items?.length === 3 && !list.data.items.some((i) => i.title.includes('上游团购')),
+      JSON.stringify(list.data?.items?.map((i) => i.title)));
     const detail = await call('GET', `/api/shop/goods/${ga.goods_id}?site=site-a`);
     check('商品详情带 2 个 SKU 与可售量', detail.data?.skus?.length === 2 && detail.data.skus[0].available === 10, JSON.stringify(detail.data?.skus));
 
@@ -229,6 +237,19 @@ async function main() {
     check('订单列表含订单行数信息', myOrders.data?.items?.length >= 5 && myOrders.data.items[0].item_count === 1, JSON.stringify(myOrders.data?.items?.slice(0, 2)));
     const od = await call('GET', `/api/shop/orders/${orderId}`);
     check('订单详情含 1 行商品与地址', od.data?.items?.length === 1 && od.data.order.address?.phone === '13800000000', JSON.stringify(od.data?.items));
+
+    console.log('\n[14] 回归：上游「单商品立即购买」链路不受影响（两套库存体系共存）');
+    const legacy = await call('POST', '/api/trade/orders', { goods_id: Number(gl.goods_id), sku_id: 's1', num: 2 });
+    check('上游单商品下单仍可用', legacy.status === 200 && legacy.data?.order_id > 0, JSON.stringify(legacy.body));
+    const legacyStock = await one(`SELECT (e->>'stock')::int AS stock FROM self_goods g, jsonb_array_elements(g.skus) e WHERE g.goods_id=$1 AND e->>'sku_id'='s1'`, [gl.goods_id]);
+    check('上游库存仍在 self_goods.skus 里扣（100→98）', legacyStock.stock === 98, JSON.stringify(legacyStock));
+    const noShopItems = await one(`SELECT COUNT(*)::int AS n FROM shop_order_item WHERE order_id=$1`, [legacy.data.order_id]);
+    check('上游单不写 shop_order_item（互不污染）', noShopItems.n === 0, JSON.stringify(noShopItems));
+    await call('POST', `/api/trade/orders/${legacy.data.order_id}/mock-pay`);
+    const legacyPaid = await one(`SELECT o.platform_status, o.fulfillment, (SELECT COUNT(*)::int FROM group_coupon WHERE order_id=o.id) AS coupons FROM "order" o WHERE o.id=$1`, [legacy.data.order_id]);
+    check('上游支付回调照常：paid + 产核销券', legacyPaid.platform_status === 'paid' && legacyPaid.coupons === 1, JSON.stringify(legacyPaid));
+    const legacyShopLog = await one(`SELECT COUNT(*)::int AS n FROM shop_stock_log WHERE ref LIKE 'pay:%' AND sku_id IN (SELECT sku_id FROM shop_sku WHERE goods_id=$1)`, [gl.goods_id]);
+    check('商城钩子对上游单不动作（无多余库存流水）', legacyShopLog.n === 0, JSON.stringify(legacyShopLog));
   } finally {
     if (api) api.kill('SIGKILL');
     await db.end().catch(() => {});
