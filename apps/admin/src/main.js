@@ -1,6 +1,9 @@
 import { createApp } from 'vue';
 import ElementPlus from 'element-plus';
 import 'element-plus/dist/index.css';
+// ⛔ 二开修复：不设语言包时 Element Plus 用英文 —— 确认框按钮是 OK/Cancel、
+//    分页显示 Total、空表显示 No Data，中文后台里非常刺眼。
+import zhCn from 'element-plus/es/locale/lang/zh-cn';
 import App from './App.vue';
 import router from './router';
 import './styles/tokens.css';
@@ -27,4 +30,4 @@ window.fetch = (input, init = {}) => {
   return rawFetch(input, init);
 };
 
-createApp(App).use(router).use(ElementPlus).mount('#app');
+createApp(App).use(router).use(ElementPlus, { locale: zhCn }).mount('#app');

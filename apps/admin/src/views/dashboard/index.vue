@@ -105,6 +105,11 @@
         <MembersPage v-else-if="menu === 'members'" />
         <SiteManage v-else-if="menu === 'site'" @navigate="onSub" />
         <ProvisionWizard v-else-if="menu === 'provision'" :site="activeSite" @done="loadProvisionState" />
+        <ShopGoods v-else-if="menu === 'shop-goods'" />
+        <ShopCategories v-else-if="menu === 'shop-categories'" />
+        <ShopFreight v-else-if="menu === 'shop-freight'" />
+        <ShopOrders v-else-if="menu === 'shop-orders'" />
+        <ShopRefunds v-else-if="menu === 'shop-refunds'" />
         <BrandPage v-else-if="menu === 'goods' || menu === 'brands'" :tab="menu" />
         <TreeView v-else-if="menu === 'commission' || menu === 'tree' || menu === 'withdraw'" :tab="menu" />
         <VerifyPage v-else-if="menu === 'verify'" />
@@ -128,7 +133,7 @@ import { computed, reactive, ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import {
-  Grid, OfficeBuilding, Goods, Tickets, Share, CreditCard, MagicStick, Setting, Bell, Stamp, Discount, ArrowDown, User, Key,
+  Grid, OfficeBuilding, Goods, Tickets, Share, CreditCard, MagicStick, Setting, Bell, Stamp, Discount, ArrowDown, User, Key, ShoppingCart,
 } from '@element-plus/icons-vue';
 import NotificationPanel from '../../components/NotificationPanel.vue';
 import AccountMenu from '../../components/AccountMenu.vue';
@@ -149,6 +154,12 @@ import SettingsPage from '../settings/index.vue';
 import VerifyPage from '../verify/index.vue';
 import MarketingPage from '../marketing/index.vue';
 import AccountPage from '../account/index.vue';
+// 商城二开（100_shop_*）：商品/分类/运费/订单/售后
+import ShopGoods from '../shop/goods.vue';
+import ShopCategories from '../shop/categories.vue';
+import ShopFreight from '../shop/freight.vue';
+import ShopOrders from '../shop/orders.vue';
+import ShopRefunds from '../shop/refunds.vue';
 
 const router = useRouter();
 const admin = JSON.parse(localStorage.getItem('fyt_admin_info') ?? 'null');
@@ -158,6 +169,16 @@ const avatarChar = (admin?.username ?? 'D').slice(0, 1).toUpperCase();
 const menus = [
   { key: 'dashboard', label: '数据看板', icon: Grid },
   { key: 'site', label: '站点管理', icon: OfficeBuilding, platformOnly: true, alwaysOn: true },
+  {
+    key: 'shop', label: '商城', icon: ShoppingCart,
+    children: [
+      { key: 'shop-goods', label: '商品管理' },
+      { key: 'shop-categories', label: '商品分类' },
+      { key: 'shop-freight', label: '运费模板' },
+      { key: 'shop-orders', label: '商城订单' },
+      { key: 'shop-refunds', label: '售后审核' },
+    ],
+  },
   {
     key: 'brand', label: '商品与品牌', icon: Goods,
     children: [
@@ -208,7 +229,7 @@ const activeSite = (() => {
 const menu = ref(
   activeSite?.scope === 'site' && activeSite?.needsProvision ? 'provision' : 'dashboard'
 );
-const openGroups = reactive({ brand: true, order: true, distribute: true, ai: true });
+const openGroups = reactive({ shop: true, brand: true, order: true, distribute: true, ai: true });
 /** 面包屑：子菜单激活时显示「父组 / 子项」 */
 const currentMenu = computed(() => {
   for (const m of menus) {
@@ -271,7 +292,10 @@ function onMenu(item) {
 }
 
 function onSub(item) {
-  const valid = ['dashboard', 'site', 'provision', 'goods', 'brands', 'orderlist', 'verify', 'ingot', 'members', 'commission', 'tree', 'withdraw', 'marketing', 'ai', 'tabbar', 'pay', 'settings'];
+  // ⛔ 二开修复：白名单从 menus **派生**，不再手写。
+  //    原来是一份硬编码数组，新增菜单（如商城 shop-*）忘加就会「点了只弹建设中的提示」，
+  //    而侧栏明明看得见、也能点 —— 排查起来像前端路由坏了。
+  const valid = ['provision', ...menus.flatMap((m) => (m.children ? m.children.map((c) => c.key) : [m.key]))];
   if (!valid.includes(item.key)) {
     ElMessage.info(`「${item.label}」建设中`);
     return;
@@ -293,6 +317,10 @@ function onSub(item) {
  */
 function isLocked(item) {
   if (!item || item.alwaysOn) return false;
+  // ⛔ 商城二开：自营商城与蚂蚁星球凭据无关（卖自己的货不需要 CPS 资质），
+  //    服务端 provision-gate 白名单已放行 /api/admin/shop，前端这里必须一致 ——
+  //    否则会出现"接口能调、菜单却锁着"的鬼状态。
+  if (item.key === 'shop' || item.allowUnprovisioned) return false;
   if (siteProvisioned.value !== false) return false; // 已开通 / 平台工作台（无当前站）→ 不锁
   // 平台工作台（scope=all）本身就是跨站管理台，超管要看全局数据，不锁
   if (activeSite?.scope === 'all') return false;
@@ -376,7 +404,11 @@ async function loadProvisionState() {
     const d = await adminApi(`/admin/sites/provision/${activeSite.site_id}`);
     siteProvisioned.value = Boolean(d.site?.provisioned);
     // 纠偏：真相源回来是「未开通」，但用户停在数据看板 → 拉回凭据开通
-    if (siteProvisioned.value === false && menu.value !== 'provision' && menu.value !== 'site' && menu.value !== 'settings' && menu.value !== 'pay') {
+    // ⛔ 商城二开补充：**用户主动离开看板去别的菜单时不再强行拉回**。
+    //    原来只要不是 provision/site/settings/pay 就一律拽回向导，
+    //    于是"只想开自营商城、不打算接 CPS"的站点永远进不去商城后台（点一下被拉回一次）。
+    //    现在只在用户仍停在默认看板时才提示去开通。
+    if (siteProvisioned.value === false && menu.value === 'dashboard') {
       menu.value = 'provision';
     }
     // ⛔ 2026-10-05 撤掉「已开通 → 强拉回看板」的反向纠偏：保存成功那一瞬把向导拽走，

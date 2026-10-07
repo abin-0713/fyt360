@@ -21,7 +21,8 @@
     "verify:shop-chain": "node deploy/scripts/verify-shop-chain.mjs",
     "verify:shop-admin": "node deploy/scripts/verify-shop-admin.mjs",
     "verify:shop-refund": "node deploy/scripts/verify-shop-refund.mjs",
-    "verify:shop-h5": "node deploy/scripts/verify-shop-h5.mjs"
+    "verify:shop-h5": "node deploy/scripts/verify-shop-h5.mjs",
+    "verify:shop-admin-ui": "node deploy/scripts/verify-shop-admin-ui.mjs"
   },
   "engines": {
     "node": ">=20"
