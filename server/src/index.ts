@@ -38,6 +38,7 @@ import { accountAdminRouter } from './routes/admin-account.js';
 import { membersRouter } from './routes/members.js';
 import { shopRouter, shopUserRouter } from './routes/shop.js';   // 商城二开：商品目录/购物车/多商品下单
 import { shopJobsRouter } from './routes/shop-jobs.js';          // 商城二开：库存占用兜底释放定时任务
+import { adminShopRouter } from './routes/admin-shop.js';         // 商城二开：后台分类/商品/SKU/运费/订单/发货
 
 const app = express();
 app.disable('x-powered-by');
@@ -95,6 +96,7 @@ app.use('/api/admin/withdraw', withdrawRouter);
 app.use('/api/admin/commission', commissionRouter);
 app.use('/api/admin/verify', verifyRouter);
 app.use('/api/admin/marketing', marketingRouter);
+app.use('/api/admin/shop', adminShopRouter); // 商城二开后台（分类/商品/SKU/运费/订单/发货）
 app.use('/api/admin/schema', schemaRouter);
 app.use('/api/admin', uploadRouter); // POST /api/admin/upload
 app.use('/api/admin/tabbar', tabbarRouter);

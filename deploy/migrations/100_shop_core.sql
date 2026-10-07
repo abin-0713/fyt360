@@ -60,6 +60,11 @@ DO $$ BEGIN
 END $$;
 COMMENT ON COLUMN "order".fulfillment IS '履约方式：express=快递 / group=到店核销 / virtual=虚拟卡券（商城二开扩展）';
 
+-- 物流快照列：024 加过，025（决策 #29「移除快递履约」）又 DROP 了 ——
+-- 商城二开要卖实物快递，必须重新引入（到店/虚拟单为 NULL，语义与原 024 一致）
+ALTER TABLE "order" ADD COLUMN IF NOT EXISTS logistics_snapshot JSONB DEFAULT NULL;
+COMMENT ON COLUMN "order".logistics_snapshot IS '快递物流 {company, tracking_no, shipped_at, by}；到店核销/虚拟卡券单为 NULL（商城二开重新引入）';
+
 -- ────────────────────────────────────────────────────────────────────────
 -- ② shop_category：商品分类（多级，站点隔离）
 -- ────────────────────────────────────────────────────────────────────────

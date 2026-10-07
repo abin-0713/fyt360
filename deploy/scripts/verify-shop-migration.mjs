@@ -72,6 +72,8 @@ async function main() {
     check('7 张 shop_* 表齐备', names.length === 7, JSON.stringify(names));
     const cols = await q(`SELECT column_name FROM information_schema.columns WHERE table_name='self_goods'`);
     const cnames = cols.map((r) => r.column_name);
+    const orderCols = (await q(`SELECT column_name FROM information_schema.columns WHERE table_name='order'`)).map((r) => r.column_name);
+    check('order 恢复快递字段 logistics_snapshot（025 删过）', orderCols.includes('logistics_snapshot'), JSON.stringify(orderCols.filter((c) => c.includes('logi'))));
     check('self_goods 新列齐备',
       ['category_id', 'brand', 'detail_html', 'spu_code', 'sales_count', 'sort', 'freight_tpl_id', 'shop_status']
         .every((c) => cnames.includes(c)), JSON.stringify(cnames));

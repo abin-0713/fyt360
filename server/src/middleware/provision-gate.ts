@@ -30,6 +30,9 @@ const ALLOW_PREFIX = [
   '/api/admin/sites',
   '/api/admin/settings',
   '/api/admin/payment',
+  // ⛔ 商城二开（100_shop_*）：自营商城与蚂蚁星球凭据**无关** —— 卖自己的货不需要 CPS 代理资质。
+  //    不放行会出现"想上架自营商品，却被告知先去配蚂蚁 apikey 才能进后台"的荒诞流程。
+  '/api/admin/shop',
 ];
 
 /** 这些前缀必须全量放行——它们是「把站开通」本身要用到的路径 */
