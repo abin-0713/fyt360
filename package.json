@@ -20,7 +20,8 @@
     "verify:shop": "node deploy/scripts/verify-shop-migration.mjs",
     "verify:shop-chain": "node deploy/scripts/verify-shop-chain.mjs",
     "verify:shop-admin": "node deploy/scripts/verify-shop-admin.mjs",
-    "verify:shop-refund": "node deploy/scripts/verify-shop-refund.mjs"
+    "verify:shop-refund": "node deploy/scripts/verify-shop-refund.mjs",
+    "verify:shop-h5": "node deploy/scripts/verify-shop-h5.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -28,7 +29,8 @@
   "devDependencies": {
     "@cloudbase/manager-node": "^5.8.8",
     "@types/bcryptjs": "^2.4.6",
-    "embedded-postgres": "^18.4.0-beta.17"
+    "embedded-postgres": "^18.4.0-beta.17",
+    "playwright": "^1.63.0"
   },
   "dependencies": {
     "qrcode-generator": "^2.0.4"

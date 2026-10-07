@@ -97,7 +97,23 @@ export async function applyRefund(input: ApplyRefundInput): Promise<{ refund_id:
     if (!Number.isInteger(num) || num <= 0) throw new HttpError(400, '退款件数不合法', 'BAD_NUM');
     if (num > remainingNum) throw new HttpError(409, `最多可退 ${remainingNum} 件`, 'NUM_TOO_MANY');
     const remainingAmount = round2(Number(item.amount) - Number(item.refund_amount));
-    const amount = Math.min(round2(Number(item.unit_price) * num), remainingAmount);
+    let amount = Math.min(round2(Number(item.unit_price) * num), remainingAmount);
+    // 退完最后一件 = 整单退完 → 金额取"剩余可退总额"（把运费/券差额一并退给买家，
+    // 否则用户全退了却拿不回运费，属于少退钱）。逐件退的中间步骤仍只退商品额。
+    const leftAfter = round2(
+      items.reduce((sum, i) => {
+        const isThis = Number(i.item_id) === Number(item.item_id);
+        const remainNum = Number(i.num) - Number(i.refunded_num) - (isThis ? num : 0);
+        return sum + Math.max(0, remainNum) * Number(i.unit_price);
+      }, 0),
+    );
+    if (leftAfter <= 0.009) {
+      const already = Number((await pool.query(
+        `SELECT COALESCE(SUM(amount),0)::float AS s FROM shop_refund WHERE order_id = $1::bigint AND status = 'success'`,
+        [input.orderId],
+      )).rows[0]?.s ?? 0);
+      amount = round2(Math.max(amount, Number(order.pay_price) - already));
+    }
     if (amount <= 0) throw new HttpError(409, '可退金额为 0', 'NO_AMOUNT');
     targets = [{ item, num, amount }];
     totalAmount = amount;

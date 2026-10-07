@@ -1,7 +1,7 @@
 // 请求封装（H5）：uni.request 走 XHR；token 用 window.localStorage 原生 API
 // key 与旧 H5 空壳一致（fyt_token_site-a）——用户升级后无需重新授权
-// mk.fyt360.cn = 统一域名（HTTP 访问服务：/api 路由到云托管 fyt360-api）
-export const API_BASE = 'https://mk.fyt360.cn';
+// 商城二开：默认同源（H5 与 API 同域部署），可用 VITE_API_BASE 覆盖为绝对地址
+export const API_BASE = import.meta.env?.VITE_API_BASE ?? '';
 
 export const SITE_CODE = 'site-a';
 const TOKEN_KEY = 'fyt_token_' + SITE_CODE;

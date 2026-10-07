@@ -54,6 +54,13 @@ async function bootAuth() {
   const oauthCode = qs.get('code');
   const state = qs.get('state');
 
+  // ⛔ 二开修复（上游 bug）：invite 必须**在"已有 token"分支之前**声明。
+  //    上游把 `const invite = ...` 放在该分支之后，却在这个分支里先用了 invite →
+  //    老用户（localStorage 已有 token）每次进站都会命中 TDZ，
+  //    抛 "Cannot access 'invite' before initialization"（压缩后变量名为 o），
+  //    表现为返回用户 H5 首页偶发白屏/配置拉不到。
+  const invite = qs.get('invite') || '';
+
   // 已有 token：直接用；带邀请码则补绑（老用户点分享链接，bindInviter 幂等）
   if (getToken()) {
     stripOAuthParams();
@@ -67,7 +74,6 @@ async function bootAuth() {
     return;
   }
 
-  const invite = qs.get('invite') || '';
   if (invite) {
     try { sessionStorage.setItem('fyt_invite', invite); } catch (e) {}
   }

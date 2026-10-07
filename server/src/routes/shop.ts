@@ -484,7 +484,7 @@ shopRouter.get('/orders/:id', requireUser, async (req: Request, res: Response, n
       `SELECT o.id, o.order_sn, o.pay_price::float AS pay_price, o.commission::float AS commission,
               o.cost_amount::float AS cost_amount, o.coupon_discount::float AS coupon_discount,
               o.platform_status, o.fulfill_status, o.refund_status, o.fulfillment,
-              o.address_snapshot, o.goods_snapshot, o.created_at, o.paid_at
+              o.address_snapshot, o.goods_snapshot, o.logistics_snapshot, o.created_at, o.paid_at
          FROM "order" o
         WHERE o.id = $1::bigint AND o.buyer_id = $2::bigint AND o.site_id = $3::uuid AND o.provider = 'self' LIMIT 1`,
       [id, req.user!.userId, req.user!.siteId],
@@ -512,6 +512,7 @@ shopRouter.get('/orders/:id', requireUser, async (req: Request, res: Response, n
           fulfillment: String(rows[0].fulfillment),
           address: rows[0].address_snapshot ?? {},
           goods_snapshot: rows[0].goods_snapshot ?? {},
+          logistics: rows[0].logistics_snapshot ?? null,
           created_at: rows[0].created_at,
           paid_at: rows[0].paid_at,
         },

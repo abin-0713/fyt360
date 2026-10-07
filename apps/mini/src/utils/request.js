@@ -1,7 +1,10 @@
 // 请求封装：M1 空壳直连 API_BASE；多站点构建期由 sites/<site>/config.json 注入
-// mk.fyt360.cn = 统一域名（HTTP 访问服务：/api 路由到云托管 fyt360-api，其余走静态托管）
-// M2.2：自动携带 C 端登录 token（clogin 签发，30d），无 token 按匿名请求
-export const API_BASE = 'https://mk.fyt360.cn';
+// 商城二开：改为构建期可配置（VITE_API_BASE），默认指向自建域名
+// 小程序必须用 https 且在微信公众平台配置 request 合法域名
+export const API_BASE = import.meta.env?.VITE_API_BASE ?? 'https://xc.fishingbank.cn';
+
+// 站点 code（与 h5 的 request.js 保持对称导出，便于共享 shop.js API 封装）
+export const SITE_CODE = 'site-a';
 
 const TOKEN_KEY = 'fyt_token';
 
