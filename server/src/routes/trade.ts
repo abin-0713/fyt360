@@ -7,6 +7,8 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import crypto from 'node:crypto';
 import { pool } from '../db/client.js';
+// 商城二开：支付成功后的多商品库存扣减钩子（非商城单直接 return，幂等）
+import { shopOnOrderPaid } from '../lib/shop.js';
 import { HttpError } from '../middleware/errors.js';
 import { requireUser, optionalUser } from '../middleware/auth.js';
 import { resolvePayConfig, jsapiPrepay, buildPayParams, decryptCallbackResource, type PayConfig } from '../lib/wxpay.js';
@@ -373,6 +375,9 @@ async function settleSelfOrder(orderId: number, paymentNo: string): Promise<void
       [orderId, `GC${orderId}`, Math.max(1, Number(o.sku_num ?? 1))],
     );
   }
+  // ⛔ 商城二开钩子（上游唯一改动点）：多商品订单支付成功后扣减 shop_sku 库存 + 写流水。
+  //    用 try/catch 包住 —— 商城侧任何异常都不允许影响支付落账本身（钱先落，账后补）。
+  try { await shopOnOrderPaid(orderId); } catch (e) { console.error('[shop] 支付后处理失败', orderId, e); }
 }
 
 /**

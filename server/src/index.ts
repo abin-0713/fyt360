@@ -36,6 +36,8 @@ import { checkinAdminRouter } from './routes/admin-checkin.js';
 import { hotwordAdminRouter } from './routes/admin-hotword.js';
 import { accountAdminRouter } from './routes/admin-account.js';
 import { membersRouter } from './routes/members.js';
+import { shopRouter, shopUserRouter } from './routes/shop.js';   // 商城二开：商品目录/购物车/多商品下单
+import { shopJobsRouter } from './routes/shop-jobs.js';          // 商城二开：库存占用兜底释放定时任务
 
 const app = express();
 app.disable('x-powered-by');
@@ -98,9 +100,13 @@ app.use('/api/admin', uploadRouter); // POST /api/admin/upload
 app.use('/api/admin/tabbar', tabbarRouter);
 app.use('/api/admin/payment', paymentRouter); // 支付商户：站点级微信支付凭据管理（M9 数据面 site_payment）
 app.use('/api/admin/settings', settingsRouter); // 系统设置：供应商凭据矩阵 + 审计概览（改密在 /api/auth/admin/password）
+// 商城二开：购物车挂在 /api/me/shop，必须先于下面通用的 /api/me 挂载
+app.use('/api/me/shop', shopUserRouter);
 app.use('/api/me', meRouter);
 app.use('/api/profile', profileRouter);
 app.use('/api/trade', tradeRouter); // 自营交易链：详情/下单/支付/回调 // C 端资料：手机号绑定/地址/昵称头像 // M4 分销 C 端：佣金钱包/提现/邀请
+app.use('/api/shop', shopRouter); // 商城二开：公开商品 + 下单 + 我的商城订单
+app.use('/api/jobs', shopJobsRouter); // 商城二开：POST /api/jobs/shop-sweep/cron（库存占用兜底释放）
 app.use('/api/me/member', memberRouter); // M5 权益会员 C 端：等级/元宝/兑换记录/券包
 app.use('/api/me/checkin', checkinRouter); // 聚宝盆签到（决策#31）：status/do
 app.use('/api/me', favoriteRouter); // 决策#41 我的收藏 / 浏览足迹（画布 06B / 06C）：/favorites /footprints

@@ -49,6 +49,17 @@ DO $$ BEGIN
 END $$;
 COMMENT ON COLUMN self_goods.delivery_type IS '履约方式：express=快递 / group=到店核销 / virtual=虚拟卡券(下单即成，无物流)';
 
+-- order.fulfillment 同样要支持 virtual（023 的约束只允许 express|group）
+-- 商城下单时把 fulfillment 写为商品的 delivery_type，虚拟卡券单必须能落库
+ALTER TABLE "order" DROP CONSTRAINT IF EXISTS order_fulfillment_chk;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'order_fulfillment_chk') THEN
+    ALTER TABLE "order" ADD CONSTRAINT order_fulfillment_chk
+      CHECK (fulfillment IN ('express','group','virtual'));
+  END IF;
+END $$;
+COMMENT ON COLUMN "order".fulfillment IS '履约方式：express=快递 / group=到店核销 / virtual=虚拟卡券（商城二开扩展）';
+
 -- ────────────────────────────────────────────────────────────────────────
 -- ② shop_category：商品分类（多级，站点隔离）
 -- ────────────────────────────────────────────────────────────────────────
