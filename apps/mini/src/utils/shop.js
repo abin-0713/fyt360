@@ -19,6 +19,9 @@ export const shopApi = {
   cartDel: (id) => request(`/api/me/shop/cart/${id}`, { method: 'DELETE' }),
   cartSelectAll: (selected) => request('/api/me/shop/cart/select-all', { method: 'POST', data: { selected } }),
 
+  // 我的可用券（商城口径）
+  coupons: (goodsAmount) => request(`/api/me/shop/coupons?goods_amount=${Number(goodsAmount) || 0}`),
+
   // 下单与支付
   checkout: (body) => request('/api/shop/checkout', { method: 'POST', data: body }),
   createOrder: (body) => request('/api/shop/orders', { method: 'POST', data: body }),

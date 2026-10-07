@@ -349,6 +349,48 @@ shopUserRouter.post('/cart/select-all', requireUser, async (req: Request, res: R
   } catch (e) { next(e); }
 });
 
+/**
+ * GET /api/me/shop/coupons?goods_amount=209
+ * 我的可用券（商城可用）：只出 scope='self'（rights 券走权益兑换流程，语义不同）、
+ * 未使用、未过期、且商品额已达门槛的券；并给出"本单可减多少"的预览，前端不必重算规则。
+ * 券的抵扣规则与下单时**同一套**口径（cash_off/discount/exchange），避免预览与实付不一致。
+ */
+shopUserRouter.get('/coupons', requireUser, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const goodsAmount = Math.max(0, Number(req.query.goods_amount ?? 0) || 0);
+    const { rows } = await pool.query(
+      `SELECT uc.id AS user_coupon_id, c.name, c.type, c.amount::float AS amount,
+              c.threshold::float AS threshold, uc.expire_at
+         FROM user_coupon uc JOIN coupon c ON c.id = uc.coupon_id
+        WHERE uc.user_id = $1::bigint AND uc.status = 'unused'
+          AND c.scope = 'self' AND c.status = 'active'
+          AND (uc.expire_at IS NULL OR uc.expire_at > now())
+          AND COALESCE(c.threshold, 0) <= $2::numeric
+        ORDER BY c.threshold DESC, uc.id DESC LIMIT 50`,
+      [req.user!.userId, goodsAmount],
+    );
+    const items = rows.map((r) => {
+      const type = String(r.type);
+      const amount = Number(r.amount ?? 0);
+      let discount = 0;
+      if (type === 'cash_off') discount = Math.min(amount, goodsAmount);
+      else if (type === 'discount') discount = goodsAmount * (1 - amount / 10);
+      else discount = goodsAmount;
+      discount = Math.max(0, Math.min(Math.round(discount * 100) / 100, goodsAmount));
+      return {
+        user_coupon_id: Number(r.user_coupon_id),
+        name: String(r.name),
+        type,
+        amount,
+        threshold: Number(r.threshold ?? 0),
+        expire_at: r.expire_at,
+        discount,   // 本单可减（已按商品额封顶）
+      };
+    }).filter((c) => c.discount > 0);
+    res.json({ ok: true, data: { goods_amount: goodsAmount, items, best: items[0] ?? null } });
+  } catch (e) { next(e); }
+});
+
 // ────────────────────────────────────────────────────────────────────────
 // 下单
 // ────────────────────────────────────────────────────────────────────────

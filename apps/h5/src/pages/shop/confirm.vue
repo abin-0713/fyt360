@@ -35,6 +35,27 @@
         <text class="item-title">{{ it.title }}</text>
         <text class="item-spec">{{ it.spec }} × {{ it.num }}</text>
       </view>
+      <view class="line coupon-row" @click="toggleCoupons">
+        <text>优惠券</text>
+        <text class="coupon-val">
+          <text v-if="selectedCoupon" class="minus">-{{ yuan(selectedCoupon.discount) }}</text>
+          <text v-else-if="coupons.length">{{ coupons.length }} 张可用 ›</text>
+          <text v-else class="muted">暂无可用 ›</text>
+        </text>
+      </view>
+      <view v-if="showCoupons" class="coupon-list">
+        <view class="coupon-item" :class="{ on: !couponId }" @click="pickCoupon(null)">不使用优惠券</view>
+        <view
+          v-for="c in coupons"
+          :key="c.user_coupon_id"
+          class="coupon-item"
+          :class="{ on: couponId === c.user_coupon_id }"
+          @click="pickCoupon(c)"
+        >
+          <text>{{ c.name }}</text>
+          <text class="coupon-discount">-{{ yuan(c.discount) }}</text>
+        </view>
+      </view>
       <view class="line"><text>商品金额</text><text>{{ yuan(quote.goods_amount) }}</text></view>
       <view class="line"><text>运费</text><text>{{ yuan(quote.freight) }}</text></view>
       <view v-if="quote.discount" class="line"><text>优惠</text><text class="minus">-{{ yuan(quote.discount) }}</text></view>
@@ -69,11 +90,19 @@ export default {
       addressId: 0,
       needAddress: true,
       quote: { goods_amount: 0, freight: 0, discount: 0, pay_price: 0 },
+      coupons: [],
+      couponId: 0,
+      showCoupons: false,
       quoteError: '',
       submitting: false,
       buyNowCache: null,
       form: { name: '', phone: '', region: '', detail: '' },
     };
+  },
+  computed: {
+    selectedCoupon() {
+      return this.coupons.find((c) => c.user_coupon_id === this.couponId) || null;
+    },
   },
   onLoad(query) {
     this.fromCart = String(query.from_cart || '') === '1';
@@ -129,15 +158,36 @@ export default {
       }
     },
     body() {
-      return this.fromCart
+      const base = this.fromCart
         ? { from_cart: 1, address_id: this.addressId || undefined }
         : { items: [{ sku_id: this.skuId, num: this.num }], address_id: this.addressId || undefined };
+      if (this.couponId) base.user_coupon_id = this.couponId;
+      return base;
+    },
+    toggleCoupons() {
+      this.showCoupons = !this.showCoupons;
+    },
+    async pickCoupon(c) {
+      this.couponId = c ? c.user_coupon_id : 0;
+      this.showCoupons = false;
+      await this.requote();
+    },
+    /** 拉可用券（用当前商品额算门槛与可减额，与下单同口径） */
+    async loadCoupons() {
+      try {
+        const d = await shopApi.coupons(this.quote.goods_amount || 0);
+        this.coupons = d.items || [];
+      } catch (e) {
+        this.coupons = [];
+      }
     },
     async requote() {
       this.quoteError = '';
       try {
         const q = await shopApi.checkout(this.body());
         this.quote = q;
+        // 没选券时刷新可用券列表（商品额可能变化，门槛/可减额跟着变）
+        if (!this.couponId) await this.loadCoupons();
       } catch (e) {
         const msg = e.message || '试算失败';
         // 快递单没选地址时后端会明确报错，这里给出可操作提示而不是甩英文
@@ -195,6 +245,14 @@ export default {
 .pay { color: #e8336d; font-size: 34rpx; font-weight: 900; }
 .minus { color: #2fbf71; }
 .quote-err { margin-top: 12rpx; color: #e23a3a; font-size: 24rpx; }
+.coupon-row { align-items: center; }
+.coupon-val { color: #e8336d; font-size: 26rpx; }
+.coupon-val .muted { color: #b59aa1; }
+.coupon-list { border: 2rpx solid #fbefdd; border-radius: 12rpx; margin: 8rpx 0; max-height: 420rpx; overflow-y: auto; }
+.coupon-item { display: flex; justify-content: space-between; padding: 18rpx 20rpx; font-size: 26rpx; color: #3d2530; border-bottom: 2rpx solid #fbefdd; }
+.coupon-item:last-child { border-bottom: none; }
+.coupon-item.on { background: #ffeaf1; color: #e8336d; font-weight: 700; }
+.coupon-discount { color: #e8336d; font-weight: 800; }
 .footbar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; align-items: center; background: #fff; border-top: 2rpx solid #f0dfc8; padding: 12rpx 20rpx; }
 .sum { flex: 1; }
 .sum-label { font-size: 24rpx; color: #8a6b75; }

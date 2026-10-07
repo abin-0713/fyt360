@@ -109,6 +109,10 @@ async function main() {
     await q(`INSERT INTO shop_sku (site_id, goods_id, sku_code, spec, price, cost_price, stock) VALUES ($1,$2,'white','白色',209,125,10)`, [siteId, goods.goods_id]);
     const user = await one(`INSERT INTO "user" (site_id, openid, invite_code, status) VALUES ($1,'h5_verify_openid','FYTH5TEST','active') RETURNING user_id`, [siteId]);
     await q(`INSERT INTO user_address (user_id, name, phone, region, detail, is_default) VALUES ($1,'赵六','13600000000','北京市朝阳区','测试路9号',1)`, [user.user_id]);
+    // 优惠券夹具：scope=self 满 200 减 5（商城券；rights 券不该出现）
+    const cpn = await one(`INSERT INTO coupon (site_id, name, type, scope, amount, threshold, valid_to)
+      VALUES ($1,'满200减5','cash_off','self',5,200, now() + interval '30 days') RETURNING id`, [siteId]);
+    await q(`INSERT INTO user_coupon (user_id, coupon_id, status, expire_at) VALUES ($1,$2,'unused', now() + interval '30 days')`, [user.user_id, cpn.id]);
     check('数据就绪（商品 无线蓝牙耳机 / 2 规格 / 1 地址）', !!(sku1.sku_id && user.user_id));
 
     console.log('\n[2] 启动 API 与静态站点（/api 反代）');
@@ -177,17 +181,31 @@ async function main() {
     await page.waitForTimeout(1200);
     const payText = await page.locator('.sum-price').innerText();
     check('结算页应付 = 商品 209 + 运费 6 = 215', payText.includes('215'), payText);
+
+    // 优惠券：展开 → 选「满200减5」→ 应付 209−5+6 = 210
+    await page.locator('.coupon-row').click();
+    await page.waitForSelector('.coupon-item', { timeout: 10000 });
+    const couponTexts = await page.locator('.coupon-item').allInnerTexts();
+    check('可用券列表出现「满200减5」', couponTexts.join('|').includes('满200减5'), JSON.stringify(couponTexts));
+    await page.locator('.coupon-item', { hasText: '满200减5' }).click();
+    await page.waitForTimeout(1200);
+    const payAfterCoupon = await page.locator('.sum-price').innerText();
+    check('选券后应付 = 209 − 5 + 6 = 210', payAfterCoupon.includes('210'), payAfterCoupon);
     await page.locator('text=提交订单').click();
     await page.waitForSelector('.big-status', { timeout: 20000 });
     const statusText = await page.locator('.big-status').innerText();
     check('跳转订单详情且状态为待支付', statusText.includes('待支付'), statusText);
     const order = await one(
-      `SELECT o.id, o.order_sn, o.pay_price::float AS pay, o.platform_status,
+      `SELECT o.id, o.order_sn, o.pay_price::float AS pay, o.platform_status, o.coupon_discount::float AS disc,
               (SELECT COUNT(*)::int FROM shop_order_item i WHERE i.order_id=o.id) AS items,
               (SELECT locked_stock FROM shop_sku WHERE sku_id=$2) AS locked
          FROM "order" o WHERE o.buyer_id = $1::bigint ORDER BY o.id DESC LIMIT 1`,
       [user.user_id, whiteSkuId]);
-    check('订单落库：金额 215 / 1 个订单行 / 占用库存 1', Number(order.pay) === 215 && Number(order.items) === 1 && Number(order.locked) === 1, JSON.stringify(order));
+    check('订单落库：金额 210 / 抵扣 5 / 1 个订单行 / 占用库存 1',
+      Number(order.pay) === 210 && Number(order.disc) === 5 && Number(order.items) === 1 && Number(order.locked) === 1,
+      JSON.stringify(order));
+    const couponUsed = await one(`SELECT status, used_order_id FROM user_coupon WHERE user_id=$1`, [user.user_id]);
+    check('券已锁定到该订单', couponUsed.status === 'used' && Number(couponUsed.used_order_id) === Number(order.id), JSON.stringify(couponUsed));
     const cartLeft = await q(`SELECT COUNT(*)::int AS n FROM shop_cart WHERE user_id=$1`, [user.user_id]);
     check('下单后购物车已清空', Number(cartLeft[0].n) === 0, JSON.stringify(cartLeft));
 
@@ -269,8 +287,8 @@ async function main() {
 }
 
 function refundRefundCheck(row) {
-  // 退完最后一件 → 金额含运费：209 + 6 = 215
-  return !!row && String(row.status) === 'applied' && Number(row.num) === 1 && Number(row.amount) === 215;
+  // 退完最后一件 → 金额取"剩余可退总额"：实付 210（已含运费与券抵扣）
+  return !!row && String(row.status) === 'applied' && Number(row.num) === 1 && Number(row.amount) === 210;
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

@@ -183,8 +183,27 @@ export default {
     },
     async pay() {
       try {
-        await shopApi.pay(this.orderId);
-        // H5 在微信外无法调起支付参数；小程序端可拿返回参数直接 uni.requestPayment
+        const p = await shopApi.pay(this.orderId);
+        // #ifdef MP-WEIXIN
+        // ⛔ 小程序必须真正调起收银台：只调 /pay 拿参数不 requestPayment = 用户点了没反应
+        await new Promise((resolve, reject) => {
+          uni.requestPayment({
+            provider: 'wxpay',
+            timeStamp: p.timeStamp,
+            nonceStr: p.nonceStr,
+            package: p.package,
+            signType: p.signType || 'RSA',
+            paySign: p.paySign,
+            success: () => resolve(true),
+            fail: (err) => reject(new Error(err && err.errMsg ? err.errMsg : '支付未完成')),
+          });
+        });
+        // 支付成功后回调是异步的（微信→我们的 notify），这里给用户即时反馈并刷新
+        uni.showToast({ title: '支付成功', icon: 'success' });
+        setTimeout(() => this.load(), 1200);
+        return;
+        // #endif
+        // H5：浏览器里无法直接调起微信支付（需公众号 JSSDK），提示到微信内完成
         uni.showToast({ title: '请在微信内完成支付', icon: 'none' });
       } catch (e) {
         const msg = e.message || '支付失败';
